@@ -1048,22 +1048,19 @@
         }
 
         // QR-Code generieren (mit echter URL)
-        function generateQRCode() {
-            updateQRCode();
-        }
-        
         function updateQRCode() {
             const baseUrl = 'https://holtorf.github.io/buergerbeteiligung-karte/mobile.html';
-            const fullUrl = actualGistId ? `${baseUrl}?gist=${actualGistId}` : baseUrl;
-            
-            // QR-Code mit echter API generieren
+            const url = new URL(baseUrl);
+            if (actualGistId) url.searchParams.set('gist', actualGistId);
+            if (GITHUB_TOKEN) url.searchParams.set('token', GITHUB_TOKEN);
+
+            const fullUrl = url.toString();
             const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(fullUrl)}`;
             
             document.getElementById('qrCode').innerHTML = `
-                <img src="${qrCodeUrl}" alt="QR Code" style="width: 100%; height: 100%; object-fit: contain;" />
+            <img src="${qrCodeUrl}" alt="QR Code" style="width: 100%; height: 100%; object-fit: contain;" />
             `;
-            
-            console.log('📱 Mobile URL:', fullUrl);
+        console.log('📱 Mobile URL:', fullUrl);
         }
 
         // Demo-Funktionen für Testzwecke
@@ -1127,36 +1124,41 @@
         }
 
         // Event Listeners
-        document.addEventListener('DOMContentLoaded', async function() {
-            // Warten bis Leaflet verfügbar ist, dann Karte initialisieren
+        document.addEventListener('DOMContentLoaded', async function () {
+              // Warten bis Leaflet verfügbar ist
             waitForLeaflet(async () => {
-                initMap();
-                generateQRCode();
-                updateEventList();
-                
-                // GitHub Gist Integration starten
-                if (GITHUB_TOKEN) {
-                    startEventPolling();
-                    console.log('✅ GitHub Gist Integration aktiv');
-                    
-                    // Versuche bestehende Events zu laden
-                    const existingEvents = await loadEventsFromGist();
-                    if (existingEvents && existingEvents.length > 0) {
-                        pendingEvents = existingEvents;
-                        updateEventList();
-                        console.log(`📂 ${existingEvents.length} bestehende Events geladen`);
-                    }
-                } else {
-                    console.warn('⚠️ GitHub Token fehlt - Live-Updates deaktiviert');
+            initMap();                 // Karte
+            updateEventList();         // ggf. vorhandene Liste rendern
+
+            // 1) Token/Gist aus URL auslesen
+            const urlParams = new URLSearchParams(window.location.search);
+            const gistParam = urlParams.get('gist');
+
+            // 2) Falls Token vorhanden, aber noch keine Gist-ID: sofort leeres Gist erzeugen
+            if (GITHUB_TOKEN) {
+            if (gistParam) {
+                actualGistId = gistParam;
+            } else {
+                const created = await createOrUpdateGist([]); // legt events.json mit leerem Array an
+                if (created && created.id) {
+                actualGistId = created.id;
+                updateBrowserURL(); // ?gist=... in die URL schreiben (Token lassen wir drin)
                 }
-                
-                // Demo-Event für Testzwecke hinzufügen (kann später entfernt werden)
-                setTimeout(() => {
-                    if (pendingEvents.length === 0) {
-                        addDemoEvent();
-                    }
-                }, 2000);
-            });
+            }
+            } else {
+            // Ohne Token kann die Seite zwar benutzt werden, aber kein Live-Update laufen.
+            // Falls ein gist=... existiert, nutzen wir es rein read-only für die Liste.
+            if (gistParam) actualGistId = gistParam;
+            }
+
+            // 3) QR erst JETZT generieren (dann enthält er gist + token, falls vorhanden)
+            generateQRCode();
+
+            // 4) Polling nur mit Token sinnvoll (read-only Laden ohne Token geht in loadEventsFromGist)
+            if (GITHUB_TOKEN) {
+            startEventPolling();
+            }
+        });
 
             // Punkt hinzufügen Button
             document.getElementById('addPointBtn').addEventListener('click', function() {
