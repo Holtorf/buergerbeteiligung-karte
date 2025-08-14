@@ -1048,19 +1048,22 @@
         }
 
         // QR-Code generieren (mit echter URL)
+        function generateQRCode() {
+            updateQRCode();
+        }
+        
         function updateQRCode() {
             const baseUrl = 'https://holtorf.github.io/buergerbeteiligung-karte/mobile.html';
             const url = new URL(baseUrl);
             if (actualGistId) url.searchParams.set('gist', actualGistId);
             if (GITHUB_TOKEN) url.searchParams.set('token', GITHUB_TOKEN);
-
             const fullUrl = url.toString();
             const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(fullUrl)}`;
-            
-            document.getElementById('qrCode').innerHTML = `
-            <img src="${qrCodeUrl}" alt="QR Code" style="width: 100%; height: 100%; object-fit: contain;" />
-            `;
-        console.log('📱 Mobile URL:', fullUrl);
+            const el = document.getElementById('qrCode');
+            if (el) {
+                el.innerHTML = `<img src="${qrCodeUrl}" alt="QR Code" style="width: 100%; height: 100%; object-fit: contain;" />`;
+            }
+            console.log('📱 Mobile URL:', fullUrl);
         }
 
         // Demo-Funktionen für Testzwecke
@@ -1124,41 +1127,55 @@
         }
 
         // Event Listeners
-        document.addEventListener('DOMContentLoaded', async function () {
-              // Warten bis Leaflet verfügbar ist
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Warten bis Leaflet verfügbar ist, dann Karte initialisieren
             waitForLeaflet(async () => {
-            initMap();                 // Karte
-            updateEventList();         // ggf. vorhandene Liste rendern
+                initMap();
+                updateEventList();
 
-            // 1) Token/Gist aus URL auslesen
-            const urlParams = new URLSearchParams(window.location.search);
-            const gistParam = urlParams.get('gist');
-
-            // 2) Falls Token vorhanden, aber noch keine Gist-ID: sofort leeres Gist erzeugen
-            if (GITHUB_TOKEN) {
-            if (gistParam) {
-                actualGistId = gistParam;
-            } else {
-                const created = await createOrUpdateGist([]); // legt events.json mit leerem Array an
-                if (created && created.id) {
-                actualGistId = created.id;
-                updateBrowserURL(); // ?gist=... in die URL schreiben (Token lassen wir drin)
+                // 🔧 Ensure we have a Gist ID BEFORE generating QR, if token is present
+                const urlParams = new URLSearchParams(window.location.search);
+                const gistParam = urlParams.get('gist');
+                if (GITHUB_TOKEN) {
+                    if (gistParam) {
+                        actualGistId = gistParam;
+                    } else {
+                        const created = await createOrUpdateGist([]); // creates empty events.json
+                        if (created && created.id) {
+                            actualGistId = created.id;
+                            updateBrowserURL(); // keep token if you want reloads to work
+                        }
+                    }
+                } else if (gistParam) {
+                    actualGistId = gistParam; // read-only mode without token
                 }
-            }
-            } else {
-            // Ohne Token kann die Seite zwar benutzt werden, aber kein Live-Update laufen.
-            // Falls ein gist=... existiert, nutzen wir es rein read-only für die Liste.
-            if (gistParam) actualGistId = gistParam;
-            }
 
-            // 3) QR erst JETZT generieren (dann enthält er gist + token, falls vorhanden)
-            generateQRCode();
-
-            // 4) Polling nur mit Token sinnvoll (read-only Laden ohne Token geht in loadEventsFromGist)
-            if (GITHUB_TOKEN) {
-            startEventPolling();
-            }
-        });
+                // Now build QR (will include gist + token if available)
+                generateQRCode();
+                
+                // GitHub Gist Integration starten
+                if (GITHUB_TOKEN) {
+                    startEventPolling();
+                    console.log('✅ GitHub Gist Integration aktiv');
+                    
+                    // Versuche bestehende Events zu laden
+                    const existingEvents = await loadEventsFromGist();
+                    if (existingEvents && existingEvents.length > 0) {
+                        pendingEvents = existingEvents;
+                        updateEventList();
+                        console.log(`📂 ${existingEvents.length} bestehende Events geladen`);
+                    }
+                } else {
+                    console.warn('⚠️ GitHub Token fehlt - Live-Updates deaktiviert');
+                }
+                
+                // Demo-Event für Testzwecke hinzufügen (kann später entfernt werden)
+                setTimeout(() => {
+                    if (pendingEvents.length === 0) {
+                        addDemoEvent();
+                    }
+                }, 2000);
+            });
 
             // Punkt hinzufügen Button
             document.getElementById('addPointBtn').addEventListener('click', function() {
