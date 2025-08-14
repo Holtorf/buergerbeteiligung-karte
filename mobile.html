@@ -302,6 +302,109 @@
 
     <script>
         let selectedColor = 'white';
+        
+        // GitHub Gist Integration
+        const GITHUB_TOKEN = getTokenFromURL(); // Token aus URL laden (falls verfügbar)
+        let gistId = null;
+        
+        // Token aus URL Parameter laden (optional für Mobile)
+        function getTokenFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('token') || null;
+        }
+        
+        // Gist ID aus URL Parameter laden
+        function loadGistId() {
+            const urlParams = new URLSearchParams(window.location.search);
+            gistId = urlParams.get('gist');
+            
+            if (gistId) {
+                console.log('📋 Gist ID gefunden:', gistId);
+            } else {
+                console.warn('⚠️ Keine Gist ID in URL - Events werden lokal gespeichert');
+            }
+        }
+        
+        // Event zu Gist hinzufügen
+        async function addEventToGist(eventData) {
+            if (!GITHUB_TOKEN || !gistId) {
+                console.warn('GitHub Token oder Gist ID fehlt - verwende LocalStorage');
+                return addEventToLocalStorage(eventData);
+            }
+
+            try {
+                // Aktuelle Events aus Gist laden
+                const currentEvents = await loadCurrentEvents();
+                
+                // Neues Event hinzufügen
+                currentEvents.push(eventData);
+                
+                // Gist updaten
+                const gistData = {
+                    description: "Bürgerbeteiligung Events",
+                    files: {
+                        "events.json": {
+                            content: JSON.stringify({
+                                events: currentEvents,
+                                lastUpdate: new Date().toISOString(),
+                                version: Date.now()
+                            }, null, 2)
+                        }
+                    }
+                };
+
+                const response = await fetch(`https://api.github.com/gists/${gistId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `token ${GITHUB_TOKEN}`,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/vnd.github.v3+json'
+                    },
+                    body: JSON.stringify(gistData)
+                });
+
+                if (response.ok) {
+                    console.log('✅ Event erfolgreich zu Gist hinzugefügt');
+                    return true;
+                } else {
+                    console.error('❌ Gist Update fehlgeschlagen:', response.status);
+                    return addEventToLocalStorage(eventData);
+                }
+            } catch (error) {
+                console.error('❌ Gist API Fehler:', error);
+                return addEventToLocalStorage(eventData);
+            }
+        }
+        
+        // Aktuelle Events aus Gist laden
+        async function loadCurrentEvents() {
+            try {
+                const response = await fetch(`https://api.github.com/gists/${gistId}`);
+                
+                if (response.ok) {
+                    const gist = await response.json();
+                    const eventsFile = gist.files['events.json'];
+                    
+                    if (eventsFile) {
+                        const data = JSON.parse(eventsFile.content);
+                        return data.events || [];
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Fehler beim Laden der Events:', error);
+            }
+            
+            return [];
+        }
+        
+        // Fallback: LocalStorage verwenden
+        function addEventToLocalStorage(eventData) {
+            const events = JSON.parse(localStorage.getItem('pendingEvents') || '[]');
+            events.push(eventData);
+            localStorage.setItem('pendingEvents', JSON.stringify(events));
+            console.log('📦 Event zu LocalStorage hinzugefügt');
+            return true;
+        }
 
         // Farbauswahl
         document.querySelectorAll('.color-option').forEach(option => {
@@ -340,7 +443,7 @@
         });
 
         // Punkt einreichen
-        function submitPoint(pointData) {
+        async function submitPoint(pointData) {
             const submitBtn = document.getElementById('submitBtn');
             const loading = document.getElementById('loading');
             const form = document.getElementById('pointForm');
@@ -350,17 +453,11 @@
             loading.style.display = 'block';
             hideMessages();
             
-            // Simulation der API-Übertragung
-            setTimeout(() => {
-                try {
-                    // Hier würde später die echte API-Integration stehen
-                    // Für jetzt simulieren wir erfolgreiche Übertragung
-                    
-                    // LocalStorage für Demo-Zwecke (würde später durch echte API ersetzt)
-                    const events = JSON.parse(localStorage.getItem('pendingEvents') || '[]');
-                    events.push(pointData);
-                    localStorage.setItem('pendingEvents', JSON.stringify(events));
-                    
+            try {
+                // Event zu Gist hinzufügen (oder LocalStorage als Fallback)
+                const success = await addEventToGist(pointData);
+                
+                if (success) {
                     // Erfolg anzeigen
                     showSuccess();
                     resetForm();
@@ -371,13 +468,16 @@
                         loading.style.display = 'none';
                         hideMessages();
                     }, 3000);
-                    
-                } catch (error) {
-                    showError('Fehler beim Übertragen. Bitte versuchen Sie es erneut.');
-                    submitBtn.disabled = false;
-                    loading.style.display = 'none';
+                } else {
+                    throw new Error('Event konnte nicht gespeichert werden');
                 }
-            }, 2000); // 2 Sekunden Simulation
+                
+            } catch (error) {
+                console.error('❌ Submit Error:', error);
+                showError('Fehler beim Übertragen. Bitte versuchen Sie es erneut.');
+                submitBtn.disabled = false;
+                loading.style.display = 'none';
+            }
         }
 
         // Formular zurücksetzen
@@ -413,6 +513,9 @@
 
         // Auto-Hide von Nachrichten nach 5 Sekunden
         document.addEventListener('DOMContentLoaded', function() {
+            // Gist ID aus URL laden
+            loadGistId();
+            
             setInterval(() => {
                 const successMsg = document.getElementById('successMessage');
                 const errorMsg = document.getElementById('errorMessage');
