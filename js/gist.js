@@ -10,6 +10,9 @@
  *  - Desktop nutzt zusätzlich createOrUpdateGist, loadEventsFromGist, updateQRCode, etc.
  */
 
+// ganz oben in gist.js (falls noch nicht da)
+import { state } from './state.js';
+
 /** Token (optional) aus der URL lesen (?token=...) */
 export function getTokenFromURL() {
   const urlParams = new URLSearchParams(window.location.search);
@@ -166,4 +169,29 @@ export function buildMobileJoinURL(baseMobileUrl, gistId, token) {
   if (gistId) url.searchParams.set('gist', gistId);
   if (token) url.searchParams.set('token', token);
   return url.toString();
+}
+
+/**
+ * Pollt in Intervallen das Gist und ruft onNewEvents auf,
+ * wenn sich die Events geändert haben.
+ * Kompatibel zu deinem bisherigen main.js-Aufruf.
+ */
+export function startEventPolling({ onNewEvents, intervalMs = 3000 } = {}) {
+  setInterval(async () => {
+    // nur pollen, wenn Token gesetzt ist
+    if (!state.GITHUB_TOKEN) return;
+    // lade nur, wenn eine Gist-ID vorhanden ist
+    if (!state.actualGistId) return;
+
+    // lädt events.json nur, wenn lastUpdate sich geändert hat
+    const data = await loadEventsFromGist(state.actualGistId, state.lastGistUpdate);
+    if (data !== null) {
+      const before = state.pendingEvents.length;
+      state.pendingEvents = data.events || [];
+      state.lastGistUpdate = data.lastUpdate;
+      if (typeof onNewEvents === 'function') {
+        onNewEvents(state.pendingEvents, before);
+      }
+    }
+  }, intervalMs);
 }
