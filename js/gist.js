@@ -1,20 +1,108 @@
-import { state } from './state.js';
+/**
+ * Gist-Helferfunktionen (shared):
+ * - Token/Gist-ID aus URL lesen
+ * - Events aus Gist laden
+ * - Events in Gist schreiben/anhängen
+ * - (Desktop) Gist erstellen/patchen, QR aktualisieren, Polling starten
+ *
+ * Hinweis:
+ *  - Mobile nutzt v. a. appendEventToGist(gistId, token, eventData)
+ *  - Desktop nutzt zusätzlich createOrUpdateGist, loadEventsFromGist, updateQRCode, etc.
+ */
 
+/** Token (optional) aus der URL lesen (?token=...) */
 export function getTokenFromURL() {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('token');
   if (!token) return null;
+  // Warnung nur als Hinweis – kein Blocker
   if (!token.startsWith('ghp_') && !token.startsWith('github_pat_')) {
-    console.warn('⚠️ Token Format scheint ungültig zu sein');
+    console.warn('⚠️ Token-Format wirkt ungewohnt. Prüfe, ob er gültig ist.');
   }
   return token;
 }
 
-export async function createOrUpdateGist(events) {
-  if (!state.GITHUB_TOKEN) {
-    console.warn('GitHub Token nicht verfügbar - Live-Updates deaktiviert');
-    return null;
+/** Gist-ID aus URL lesen (?gist=...) */
+export function getGistIdFromURL() {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get('gist') || null;
+}
+
+/** (Shared) Aktuelle Events aus einem Gist lesen. */
+export async function loadCurrentEvents(gistId) {
+  if (!gistId) return [];
+  try {
+    const res = await fetch(`https://api.github.com/gists/${gistId}`);
+    if (!res.ok) return [];
+    const gist = await res.json();
+    const file = gist.files?.['events.json'];
+    if (!file) return [];
+    const data = JSON.parse(file.content);
+    return data.events || [];
+  } catch (e) {
+    console.error('❌ Fehler beim Laden der Events aus Gist:', e);
+    return [];
   }
+}
+
+/**
+ * (Mobile) Ein Event an ein bestehendes Gist anhängen.
+ *  - Lädt aktuelle Liste
+ *  - hängt eventData an
+ *  - PATCH zurück ins Gist
+ * Fällt bei Fehlern auf true/false zurück, damit die UI reagieren kann.
+ */
+export async function appendEventToGist(gistId, token, eventData) {
+  if (!gistId) {
+    console.warn('appendEventToGist: keine Gist-ID vorhanden');
+    return false;
+  }
+  if (!token) {
+    console.warn('appendEventToGist: kein Token vorhanden');
+    return false;
+  }
+
+  try {
+    const current = await loadCurrentEvents(gistId);
+    const payload = {
+      description: 'Bürgerbeteiligung Events',
+      files: {
+        'events.json': {
+          content: JSON.stringify({
+            events: [...current, eventData],
+            lastUpdate: new Date().toISOString(),
+            version: Date.now()
+          }, null, 2)
+        }
+      }
+    };
+
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `token ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      console.error('❌ Gist-Update fehlgeschlagen:', res.status, await res.text());
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error('❌ Gist-API Fehler bei appendEventToGist:', e);
+    return false;
+  }
+}
+
+/* ===== Nur für Desktop gebraucht – Mobile kann es ignorieren ===== */
+
+/** (Desktop) Neues Gist mit leerer events.json erstellen oder bestehendes patchen */
+export async function createOrUpdateGist(token, existingGistId = null, events = []) {
+  if (!token) { console.warn('createOrUpdateGist: kein Token'); return null; }
 
   const gistData = {
     description: 'Bürgerbeteiligung Events',
@@ -22,7 +110,7 @@ export async function createOrUpdateGist(events) {
     files: {
       'events.json': {
         content: JSON.stringify({
-          events: events,
+          events,
           lastUpdate: new Date().toISOString(),
           version: Date.now()
         }, null, 2)
@@ -30,114 +118,52 @@ export async function createOrUpdateGist(events) {
     }
   };
 
-  try {
-    let url = 'https://api.github.com/gists';
-    let method = 'POST';
-    if (state.actualGistId) { url = `https://api.github.com/gists/${state.actualGistId}`; method = 'PATCH'; }
+  const method = existingGistId ? 'PATCH' : 'POST';
+  const url = existingGistId ? `https://api.github.com/gists/${existingGistId}` : 'https://api.github.com/gists';
 
-    const response = await fetch(url, {
+  try {
+    const res = await fetch(url, {
       method,
       headers: {
-        'Authorization': `token ${state.GITHUB_TOKEN}`,
+        'Authorization': `token ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/vnd.github.v3+json'
       },
       body: JSON.stringify(gistData)
     });
-
-    if (response.ok) {
-      const result = await response.json();
-      if (!state.actualGistId) {
-        state.actualGistId = result.id;
-        updateQRCode();
-        updateBrowserURL();
-      }
-      return result;
-    } else {
-      console.error('❌ Gist API Error:', response.status, await response.text());
+    if (!res.ok) {
+      console.error('❌ createOrUpdateGist fehlgeschlagen:', res.status, await res.text());
       return null;
     }
+    return await res.json();
   } catch (e) {
-    console.error('❌ Gist API Fehler:', e);
+    console.error('❌ Gist-API Fehler bei createOrUpdateGist:', e);
     return null;
   }
 }
 
-export function updateBrowserURL() {
-  if (state.actualGistId && window.history?.replaceState) {
-    const url = new URL(window.location);
-    url.searchParams.set('gist', state.actualGistId);
-    // Optional: Token aus URL entfernen
-    // url.searchParams.delete('token');
-    window.history.replaceState({}, '', url);
-  }
-}
-
-export async function loadEventsFromGist() {
-  if (!state.actualGistId) {
-    const urlParams = new URLSearchParams(window.location.search);
-    const gistParam = urlParams.get('gist');
-    if (gistParam) state.actualGistId = gistParam;
-  }
-  if (!state.actualGistId) return [];
-
+/** (Desktop) events.json aus Gist laden (nur wenn sich geändert hat) */
+export async function loadEventsFromGist(gistId, lastUpdate) {
+  if (!gistId) return null;
   try {
-    const res = await fetch(`https://api.github.com/gists/${state.actualGistId}`);
-    if (res.ok) {
-      const gist = await res.json();
-      const eventsFile = gist.files['events.json'];
-      if (eventsFile) {
-        const data = JSON.parse(eventsFile.content);
-        if (data.lastUpdate !== state.lastGistUpdate) {
-          state.lastGistUpdate = data.lastUpdate;
-          return data.events || [];
-        }
-      }
-    }
+    const res = await fetch(`https://api.github.com/gists/${gistId}`);
+    if (!res.ok) return null;
+    const gist = await res.json();
+    const file = gist.files?.['events.json'];
+    if (!file) return null;
+    const data = JSON.parse(file.content);
+    if (data.lastUpdate !== lastUpdate) return data;
+    return null;
   } catch (e) {
-    console.error('❌ Fehler beim Laden der Events:', e);
+    console.error('❌ Fehler beim Laden aus Gist:', e);
+    return null;
   }
-  return null; // Keine Änderung
 }
 
-export function updateQRCode() {
-  const baseUrl = 'https://holtorf.github.io/buergerbeteiligung-karte/mobile.html';
-  const url = new URL(baseUrl);
-  if (state.actualGistId) url.searchParams.set('gist', state.actualGistId);
-  if (state.GITHUB_TOKEN) url.searchParams.set('token', state.GITHUB_TOKEN);
-  const fullUrl = url.toString();
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(fullUrl)}`;
-  const el = document.getElementById('qrCode');
-  if (el) el.innerHTML = `<img src="${qrCodeUrl}" alt="QR Code" style="width:100%; height:100%; object-fit:contain;" />`;
-  console.log('📱 Mobile URL:', fullUrl);
-}
-
-export function generateQRCode() {
-  updateQRCode();
-}
-
-export function startEventPolling({ onNewEvents }) {
-  setInterval(async () => {
-    if (state.GITHUB_TOKEN) {
-      const newEvents = await loadEventsFromGist();
-      if (newEvents !== null) {
-        const before = state.pendingEvents.length;
-        state.pendingEvents = newEvents;
-        onNewEvents?.(newEvents, before);
-      }
-    }
-  }, 3000);
-}
-
-export function addMobileEvent(eventData) {
-  const event = {
-    ...eventData,
-    timestamp: new Date().toLocaleString(),
-    id: Date.now() + Math.random()
-  };
-  state.pendingEvents.push(event);
-  createOrUpdateGist(state.pendingEvents);
-  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    new Notification('Neuer Punkt eingereicht', { body: `"${event.title}" von mobiler Teilnahme` });
-  }
+/** (Desktop) QR für mobile Seite bauen – hier nur als Helfer, falls du’s teilen willst */
+export function buildMobileJoinURL(baseMobileUrl, gistId, token) {
+  const url = new URL(baseMobileUrl);
+  if (gistId) url.searchParams.set('gist', gistId);
+  if (token) url.searchParams.set('token', token);
+  return url.toString();
 }
