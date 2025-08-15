@@ -159,20 +159,25 @@ export function buildMobileJoinURL(baseMobileUrl, gistId, token) {
   return url.toString();
 }
 
-/** Desktop: generate QR (injects <img> into #qrCode). */
+// (falls genutzt) nur auf Desktop gebraucht
 export function updateQRCode() {
-  if (!state) return; // safety
   const baseUrl = 'https://holtorf.github.io/buergerbeteiligung-karte/mobile.html';
-  const fullUrl = buildMobileJoinURL(baseUrl, state.actualGistId, state.GITHUB_TOKEN);
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(fullUrl)}`;
+  const url = new URL(baseUrl);
+  if (state?.actualGistId) url.searchParams.set('gist', state.actualGistId);
+  if (state?.GITHUB_TOKEN) url.searchParams.set('token', state.GITHUB_TOKEN);
+
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(url.toString())}`;
   const el = document.getElementById('qrCode');
-  if (el) el.innerHTML = `<img src="${qrCodeUrl}" alt="QR Code" style="width:100%; height:100%; object-fit:contain;" />`;
-  console.log('📱 Mobile URL:', fullUrl);
+  if (el) {
+    el.innerHTML = `<img src="${qrCodeUrl}" alt="QR Code" style="width:100%; height:100%; object-fit:contain;" />`;
+  }
+  console.log('📱 Mobile URL:', url.toString());
 }
 
-/** Desktop: semantic alias (kept for compatibility with your main.js) */
-export function generateQRCode() { updateQRCode(); }
-
+// Alias für alte Aufrufe
+export function generateQRCode() {
+  return updateQRCode();
+}
 /**
  * Desktop: Poll gist for changes every intervalMs.
  * Calls onNewEvents(events, previousLength) when changed.
