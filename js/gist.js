@@ -1,37 +1,34 @@
+// js/gist.js
 /**
- * Gist-Helferfunktionen (shared):
- * - Token/Gist-ID aus URL lesen
- * - Events aus Gist laden
- * - Events in Gist schreiben/anhängen
- * - (Desktop) Gist erstellen/patchen, QR aktualisieren, Polling starten
+ * Shared Gist helpers for Desktop & Mobile.
+ * - Read token/gist from URL
+ * - Load/append events in a gist (events.json)
+ * - Desktop-only helpers: createOrUpdateGist, loadEventsFromGist (with lastUpdate),
+ *   QR URL helper, startEventPolling.
  *
- * Hinweis:
- *  - Mobile nutzt v. a. appendEventToGist(gistId, token, eventData)
- *  - Desktop nutzt zusätzlich createOrUpdateGist, loadEventsFromGist, updateQRCode, etc.
+ * Requires: ./state.js on Desktop (for polling). Mobile does NOT need state.js.
  */
 
-// ganz oben in gist.js (falls noch nicht da)
-import { state } from './state.js';
+import { state } from './state.js'; // Desktop uses this; on Mobile this import is harmless if unused
 
-/** Token (optional) aus der URL lesen (?token=...) */
+/** Token (optional) from ?token=... */
 export function getTokenFromURL() {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('token');
   if (!token) return null;
-  // Warnung nur als Hinweis – kein Blocker
   if (!token.startsWith('ghp_') && !token.startsWith('github_pat_')) {
-    console.warn('⚠️ Token-Format wirkt ungewohnt. Prüfe, ob er gültig ist.');
+    console.warn('⚠️ Token format looks unusual. Double-check validity.');
   }
   return token;
 }
 
-/** Gist-ID aus URL lesen (?gist=...) */
+/** Gist ID (optional) from ?gist=... */
 export function getGistIdFromURL() {
   const urlParams = new URLSearchParams(window.location.search);
   return urlParams.get('gist') || null;
 }
 
-/** (Shared) Aktuelle Events aus einem Gist lesen. */
+/** Load current events array from a gist (returns [] on issues). */
 export async function loadCurrentEvents(gistId) {
   if (!gistId) return [];
   try {
@@ -43,27 +40,15 @@ export async function loadCurrentEvents(gistId) {
     const data = JSON.parse(file.content);
     return data.events || [];
   } catch (e) {
-    console.error('❌ Fehler beim Laden der Events aus Gist:', e);
+    console.error('❌ loadCurrentEvents error:', e);
     return [];
   }
 }
 
-/**
- * (Mobile) Ein Event an ein bestehendes Gist anhängen.
- *  - Lädt aktuelle Liste
- *  - hängt eventData an
- *  - PATCH zurück ins Gist
- * Fällt bei Fehlern auf true/false zurück, damit die UI reagieren kann.
- */
+/** Append one event to a gist (Mobile path). */
 export async function appendEventToGist(gistId, token, eventData) {
-  if (!gistId) {
-    console.warn('appendEventToGist: keine Gist-ID vorhanden');
-    return false;
-  }
-  if (!token) {
-    console.warn('appendEventToGist: kein Token vorhanden');
-    return false;
-  }
+  if (!gistId) { console.warn('appendEventToGist: missing gistId'); return false; }
+  if (!token)   { console.warn('appendEventToGist: missing token');  return false; }
 
   try {
     const current = await loadCurrentEvents(gistId);
@@ -91,21 +76,19 @@ export async function appendEventToGist(gistId, token, eventData) {
     });
 
     if (!res.ok) {
-      console.error('❌ Gist-Update fehlgeschlagen:', res.status, await res.text());
+      console.error('❌ appendEventToGist failed:', res.status, await res.text());
       return false;
     }
     return true;
   } catch (e) {
-    console.error('❌ Gist-API Fehler bei appendEventToGist:', e);
+    console.error('❌ appendEventToGist API error:', e);
     return false;
   }
 }
 
-/* ===== Nur für Desktop gebraucht – Mobile kann es ignorieren ===== */
-
-/** (Desktop) Neues Gist mit leerer events.json erstellen oder bestehendes patchen */
+/** Desktop: create new gist or update existing with given events array. */
 export async function createOrUpdateGist(token, existingGistId = null, events = []) {
-  if (!token) { console.warn('createOrUpdateGist: kein Token'); return null; }
+  if (!token) { console.warn('createOrUpdateGist: missing token'); return null; }
 
   const gistData = {
     description: 'Bürgerbeteiligung Events',
@@ -122,7 +105,9 @@ export async function createOrUpdateGist(token, existingGistId = null, events = 
   };
 
   const method = existingGistId ? 'PATCH' : 'POST';
-  const url = existingGistId ? `https://api.github.com/gists/${existingGistId}` : 'https://api.github.com/gists';
+  const url = existingGistId
+    ? `https://api.github.com/gists/${existingGistId}`
+    : `https://api.github.com/gists`;
 
   try {
     const res = await fetch(url, {
@@ -135,17 +120,20 @@ export async function createOrUpdateGist(token, existingGistId = null, events = 
       body: JSON.stringify(gistData)
     });
     if (!res.ok) {
-      console.error('❌ createOrUpdateGist fehlgeschlagen:', res.status, await res.text());
+      console.error('❌ createOrUpdateGist failed:', res.status, await res.text());
       return null;
     }
     return await res.json();
   } catch (e) {
-    console.error('❌ Gist-API Fehler bei createOrUpdateGist:', e);
+    console.error('❌ createOrUpdateGist error:', e);
     return null;
   }
 }
 
-/** (Desktop) events.json aus Gist laden (nur wenn sich geändert hat) */
+/**
+ * Desktop: Load events.json if it changed since lastUpdate.
+ * Returns the parsed data object or null if unchanged/failure.
+ */
 export async function loadEventsFromGist(gistId, lastUpdate) {
   if (!gistId) return null;
   try {
@@ -158,40 +146,48 @@ export async function loadEventsFromGist(gistId, lastUpdate) {
     if (data.lastUpdate !== lastUpdate) return data;
     return null;
   } catch (e) {
-    console.error('❌ Fehler beim Laden aus Gist:', e);
+    console.error('❌ loadEventsFromGist error:', e);
     return null;
   }
 }
 
-/** (Desktop) QR für mobile Seite bauen – hier nur als Helfer, falls du’s teilen willst */
+/** Build the mobile join URL for QR (helper). */
 export function buildMobileJoinURL(baseMobileUrl, gistId, token) {
   const url = new URL(baseMobileUrl);
   if (gistId) url.searchParams.set('gist', gistId);
-  if (token) url.searchParams.set('token', token);
+  if (token)  url.searchParams.set('token', token);
   return url.toString();
 }
 
+/** Desktop: generate QR (injects <img> into #qrCode). */
+export function updateQRCode() {
+  if (!state) return; // safety
+  const baseUrl = 'https://holtorf.github.io/buergerbeteiligung-karte/mobile.html';
+  const fullUrl = buildMobileJoinURL(baseUrl, state.actualGistId, state.GITHUB_TOKEN);
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(fullUrl)}`;
+  const el = document.getElementById('qrCode');
+  if (el) el.innerHTML = `<img src="${qrCodeUrl}" alt="QR Code" style="width:100%; height:100%; object-fit:contain;" />`;
+  console.log('📱 Mobile URL:', fullUrl);
+}
+
+/** Desktop: semantic alias (kept for compatibility with your main.js) */
+export function generateQRCode() { updateQRCode(); }
+
 /**
- * Pollt in Intervallen das Gist und ruft onNewEvents auf,
- * wenn sich die Events geändert haben.
- * Kompatibel zu deinem bisherigen main.js-Aufruf.
+ * Desktop: Poll gist for changes every intervalMs.
+ * Calls onNewEvents(events, previousLength) when changed.
  */
 export function startEventPolling({ onNewEvents, intervalMs = 3000 } = {}) {
   setInterval(async () => {
-    // nur pollen, wenn Token gesetzt ist
-    if (!state.GITHUB_TOKEN) return;
-    // lade nur, wenn eine Gist-ID vorhanden ist
-    if (!state.actualGistId) return;
+    if (!state?.GITHUB_TOKEN) return;
+    if (!state?.actualGistId) return;
 
-    // lädt events.json nur, wenn lastUpdate sich geändert hat
     const data = await loadEventsFromGist(state.actualGistId, state.lastGistUpdate);
     if (data !== null) {
       const before = state.pendingEvents.length;
-      state.pendingEvents = data.events || [];
-      state.lastGistUpdate = data.lastUpdate;
-      if (typeof onNewEvents === 'function') {
-        onNewEvents(state.pendingEvents, before);
-      }
+      state.pendingEvents   = data.events || [];
+      state.lastGistUpdate  = data.lastUpdate;
+      if (typeof onNewEvents === 'function') onNewEvents(state.pendingEvents, before);
     }
   }, intervalMs);
 }
